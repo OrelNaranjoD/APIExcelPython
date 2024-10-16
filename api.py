@@ -1,121 +1,423 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS
+from flasgger import Swagger
+from flask_jwt_extended import JWTManager, jwt_required, create_access_token
 import openpyxl
+from dotenv import load_dotenv
+import os
 
-# ----------- ¿Qué hace la librería openpyxl? -----------
-# La librería openpyxl se utiliza para leer y escribir en archivos Excel (.xlsx).
-# Permite abrir un archivo Excel, manipular sus hojas y guardar cambios, como si fuera una base de datos.
-# En este caso, usamos Excel para almacenar los datos de los usuarios en lugar de una base de datos tradicional.
+# Cargar variables de entorno desde el archivo .env
+load_dotenv()
 
-# Crear una aplicación Flask
 app = Flask(__name__)
+CORS(app)
 
-# Imprimir mensaje en consola al iniciar el servidor
-# Este mensaje se mostrará cuando inicies el servidor. Sirve como presentación del ejercicio.
-print("Duoc UC, Ejemplo de API básica con Excel")
-print("Profesor: Felipe Robinet")
+# Configuración de Swagger
+swagger_config = {
+    "headers": [],
+    "specs": [
+        {
+            "endpoint": "apispec_1",
+            "route": "/support/apispec_1.json",
+            "rule_filter": lambda rule: True,
+            "model_filter": lambda tag: True,
+        }
+    ],
+    "static_url_path": "/support/flasgger_static",
+    "swagger_ui": True,
+    "specs_route": "/support",
+}
 
-# Ruta para obtener todos los datos del archivo Excel (GET /usuarios)
-@app.route('/usuarios', methods=['GET'])
+swagger_template = {
+    "swagger": "2.0",
+    "info": {
+        "title": "API de Ejemplo con Excel",
+        "description": "Esta es una API de ejemplo para manejar usuarios usando un archivo Excel.",
+        "version": "1.0.1",
+        "license": {"name": "MIT", "url": "https://opensource.org/licenses/MIT"},
+    },
+    "host": "localhost:5000",
+    "basePath": "/",
+    "schemes": ["http", "https"],
+    "tags": [
+        {
+            "name": "Usuarios",
+            "description": "Operaciones relacionadas con los usuarios",
+        },
+        {
+            "name": "Autenticación",
+            "description": "Operaciones relacionadas con la autenticación",
+        },
+    ],
+    "securityDefinitions": {
+        "Bearer": {
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header",
+            "description": 'JWT Authorization header using the Bearer scheme. Example: "Authorization: Bearer {token}"',
+        }
+    },
+    "security": [{"Bearer": []}],
+}
+swagger = Swagger(app, config=swagger_config, template=swagger_template)
+
+# Configuración de JWT token
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
+jwt = JWTManager(app)
+
+
+# Función para cargar el archivo Excel
+def cargar_excel():
+    """Carga el archivo Excel y retorna la hoja activa"""
+    try:
+        libro = openpyxl.load_workbook("datos.xlsx")
+        return libro, libro.active
+    except FileNotFoundError:
+        return None, None
+
+
+# Función para buscar un usuario por ID
+def buscar_usuario_por_id(hoja, id):
+    """Busca un usuario por ID en la hoja de Excel"""
+    for fila in hoja.iter_rows(min_row=2, values_only=True):
+        id_usuario, nombre, email = fila
+        if int(id_usuario) == int(id):
+            return {"id": int(id_usuario), "nombre": nombre, "email": email}
+    return None
+
+
+# Función para buscar un usuario por email
+def buscar_usuario_por_email(hoja, email):
+    """Busca un usuario por email en la hoja de Excel"""
+    for fila in hoja.iter_rows(min_row=2, values_only=True):
+        id_usuario, nombre, email_usuario = fila
+        if email_usuario == email:
+            return {"id": int(id_usuario), "nombre": nombre, "email": email_usuario}
+    return None
+
+
+@app.route("/login", methods=["POST"])
+def login():
+    """
+    Solicitar un token JWT
+    ---
+    tags:
+    - Autenticación
+    parameters:
+      - in: body
+        name: usuario
+        description: Correo del usuario
+        schema:
+          type: object
+          required:
+            - email
+          properties:
+            email:
+              type: string
+              description: Email del usuario
+              example: "orel.naranjo@prueba.com"
+    responses:
+      200:
+        description: Token JWT generado
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+                  description: El token JWT en formato Bearer
+                  example: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTcyOTExNTE3MywianRpIjoiZDhlYzNkYjQtMTBlYS00YjMxLTg2NmYtMTYzM2RhMDIxYTRiIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6Im9yZWwubmFyYW5qb0BwcnVlYmEuY29tIiwibmJmIjoxNzI5MTE1MTczLCJjc3JmIjoiZDkwNTcwZDktMzc1ZC00NGYxLTk4M2EtOWQ1NTkzMzhmNmZlIiwiZXhwIjoxNzI5MTE2MDczfQ.0_V1qfqAEHCQleSORldg65_oISjwT5idRg0guV04O_U"
+      400:
+        description: Email es requerido
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mensaje:
+                  type: string
+                  example: "Email es requerido"
+      401:
+        description: Email no encontrado
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mensaje:
+                  type: string
+                  example: "Email no encontrado"
+      500:
+        description: Error al cargar el archivo Excel
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mensaje:
+                  type: string
+                  example: "Error: No se pudo cargar el archivo Excel"
+    """
+    email = request.json.get("email", None)
+    if not email:
+        return jsonify({"mensaje": "Email es requerido"}), 400
+
+    libro, hoja = cargar_excel()
+    if not hoja:
+        return jsonify({"mensaje": "Error: No se pudo cargar el archivo Excel"}), 500
+
+    usuario = buscar_usuario_por_email(hoja, email)
+    if not usuario:
+        return jsonify({"mensaje": "Email no encontrado"}), 401
+
+    access_token = create_access_token(identity=email)
+    bearer_token = f"Bearer {access_token}"
+    return jsonify(token=bearer_token), 200
+
+
+# Rutas de Usuarios
+@app.route("/usuarios", methods=["GET"])
+@jwt_required()
 def obtener_usuarios():
-    # Crear una lista vacía para almacenar los usuarios que leemos del archivo Excel
+    """
+    Obtener todos los usuarios
+    ---
+    tags:
+    - Usuarios
+    responses:
+      200:
+        description: Lista de usuarios
+        schema:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+                description: ID del usuario
+              nombre:
+                type: string
+                description: Nombre del usuario
+              email:
+                type: string
+                description: Email del usuario
+      401:
+        description: "Error: No Autorizado"
+        schema:
+          type: object
+          properties:
+            mensaje:
+              type: string
+              description: Mensaje de error
+    """
     usuarios = []
+    try:
+        libro = openpyxl.load_workbook("datos.xlsx")
+        hoja = libro.active
+        # Verificar los datos leídos
+        for fila in hoja.iter_rows(min_row=2, values_only=True):
+            id, nombre, email = fila
+            usuarios.append({"id": id, "nombre": nombre, "email": email})
 
-    # Abrir el archivo Excel existente 'datos.xlsx'
-    # El método load_workbook abre el archivo Excel para que podamos leer su contenido.
-    libro = openpyxl.load_workbook('datos.xlsx')
+        if not usuarios:
+            print("No se encontraron usuarios.")
+    except Exception as e:
+        print(f"Error al cargar usuarios: {e}")
 
-    # Seleccionamos la primera hoja activa del archivo
-    hoja = libro.active
-
-    # Iteramos sobre cada fila de la hoja de cálculo.
-    # values_only=True nos permite obtener solo los valores (sin formato ni fórmulas).
-    for fila in hoja.iter_rows(values_only=True):
-        id, nombre, email = fila  # Se asignan las columnas a variables
-        # Añadimos los datos a la lista de usuarios
-        usuarios.append({'id': id, 'nombre': nombre, 'email': email})
-    
-    # Convertimos la lista de usuarios a formato JSON para enviar como respuesta
     return jsonify(usuarios)
 
-# Ruta para agregar un nuevo usuario al archivo Excel (POST /usuarios)
-@app.route('/usuarios', methods=['POST'])
+
+@app.route("/usuarios", methods=["POST"])
+@jwt_required()
 def agregar_usuario():
-    # Obtenemos los datos del nuevo usuario desde la solicitud (en formato JSON)
+    """
+    Agregar un nuevo usuario
+    ---
+    tags:
+    - Usuarios
+    parameters:
+      - in: body
+        name: usuario
+        description: El usuario a agregar
+        schema:
+          type: object
+          required:
+            - nombre
+            - email
+          properties:
+            nombre:
+              type: string
+              description: Nombre del usuario
+            email:
+              type: string
+              description: Email del usuario
+    responses:
+      201:
+        description: Usuario agregado
+        schema:
+          type: object
+          properties:
+            mensaje:
+              type: string
+              description: Mensaje de éxito
+            id:
+              type: integer
+              description: ID del usuario agregado
+      409:
+        description: "Error: El nombre o el email ya existen"
+        schema:
+          type: object
+          properties:
+            mensaje:
+              type: string
+              description: Mensaje de error
+    """
     nuevo_usuario = request.json
+    libro, hoja = cargar_excel()
+    if not hoja:
+        return jsonify({"mensaje": "Error: No se pudo cargar el archivo Excel"}), 500
 
-    # Abrimos el archivo Excel para escribir en él
-    libro = openpyxl.load_workbook('datos.xlsx')
-    hoja = libro.active
-
-    # ----------- Verificación de duplicados -----------
-    # Antes de agregar un usuario nuevo, verificamos si ya existe un usuario con el mismo ID
+    # Verificar si el nombre o el email ya existen
     for fila in hoja.iter_rows(min_row=2, values_only=True):
-        id_existente = str(fila[0])  # Obtenemos el ID de la fila actual
-        # Si el ID ya existe, devolvemos un mensaje de error
-        if id_existente == str(nuevo_usuario['id']):
-            return jsonify({'mensaje': 'Error: El usuario con ID ya existe'}), 400
+        if fila[1] == nuevo_usuario["nombre"] or fila[2] == nuevo_usuario["email"]:
+            return jsonify({"mensaje": "Error: El nombre o el email ya existen"}), 409
 
-    # ----------- Agregar el usuario al archivo Excel -----------
-    # Si el ID no existe, agregamos el nuevo usuario al final de la hoja
-    hoja.append([nuevo_usuario['id'], nuevo_usuario['nombre'], nuevo_usuario['email']])
+    # Encontrar el ID más alto y generar uno nuevo
+    nuevo_id = (
+        max(
+            (fila[0] for fila in hoja.iter_rows(min_row=2, values_only=True)), default=0
+        )
+        + 1
+    )
 
-    # Guardamos los cambios en el archivo Excel
-    libro.save('datos.xlsx')
+    # Agregar el nuevo usuario
+    hoja.append([nuevo_id, nuevo_usuario["nombre"], nuevo_usuario["email"]])
+    libro.save("datos.xlsx")
+    return jsonify({"mensaje": "Usuario agregado", "id": nuevo_id}), 201
 
-    # Enviamos una respuesta indicando que el usuario fue agregado exitosamente
-    return jsonify({'mensaje': 'Usuario agregado'}), 201
 
-# Ruta para obtener un usuario específico por ID desde Excel (GET /usuarios/<id>)
-@app.route('/usuarios/<id>', methods=['GET'])
+@app.route("/usuarios/<int:id>", methods=["GET"])
+@jwt_required()
 def obtener_usuario(id):
-    # Abrimos el archivo Excel para leer los datos
-    libro = openpyxl.load_workbook('datos.xlsx')
-    hoja = libro.active
+    """
+    Obtener un usuario por ID
+    ---
+    tags:
+    - Usuarios
+    parameters:
+      - in: path
+        name: id
+        type: integer
+        required: true
+        description: ID del usuario
+    responses:
+      200:
+        description: Información del usuario
+        schema:
+          type: object
+          properties:
+            id:
+              type: integer
+              description: ID del usuario
+            nombre:
+              type: string
+              description: Nombre del usuario
+            email:
+              type: string
+              description: Email del usuario
+      404:
+        description: Usuario no encontrado
+    """
+    libro, hoja = cargar_excel()
+    if not hoja:
+        return jsonify({"mensaje": "Error: No se pudo cargar el archivo Excel"}), 500
 
-    # Recorremos todas las filas de la hoja para buscar al usuario con el ID solicitado
-    for fila in hoja.iter_rows(values_only=True):
-        id_usuario, nombre, email = fila
-        # Si encontramos el ID, devolvemos la información del usuario en formato JSON
-        if str(id_usuario) == id:
-            return jsonify({'id': id_usuario, 'nombre': nombre, 'email': email})
-    
-    # Si no encontramos el usuario, devolvemos un mensaje de error
-    return jsonify({'mensaje': 'Usuario no encontrado'}), 404
+    usuario = buscar_usuario_por_id(hoja, id)
+    if usuario:
+        return jsonify(usuario)
+    return jsonify({"mensaje": "Usuario no encontrado"}), 404
 
-# Ruta para actualizar un usuario existente en el archivo Excel (PUT /usuarios/<id>)
-@app.route('/usuarios/<id>', methods=['PUT'])
+
+@app.route("/usuarios/<int:id>", methods=["PUT", "PATCH"])
+@jwt_required()
 def actualizar_usuario(id):
-    # Obtenemos los datos actualizados desde la solicitud en formato JSON
+    """
+    Actualizar un usuario existente
+    ---
+    tags:
+    - Usuarios
+    parameters:
+      - in: path
+        name: id
+        type: integer
+        required: true
+        description: ID del usuario
+      - in: body
+        name: usuario
+        description: Datos actualizados del usuario
+        schema:
+          type: object
+          properties:
+            nombre:
+              type: string
+              description: Nombre del usuario
+            email:
+              type: string
+              description: Email del usuario
+    responses:
+      200:
+        description: Usuario actualizado
+      404:
+        description: Usuario no encontrado
+    """
     datos_actualizados = request.json
+    libro, hoja = cargar_excel()
+    if not hoja:
+        return jsonify({"mensaje": "Error: No se pudo cargar el archivo Excel"}), 500
 
-    # Abrimos el archivo Excel para modificarlo
-    libro = openpyxl.load_workbook('datos.xlsx')
-    hoja = libro.active
+    for fila in hoja.iter_rows(min_row=2):
+        if int(fila[0].value) == int(id):
+            fila[1].value = datos_actualizados.get("nombre", fila[1].value)
+            fila[2].value = datos_actualizados.get("email", fila[2].value)
+            libro.save("datos.xlsx")
+            return jsonify({"mensaje": "Usuario actualizado"}), 200
 
-    # Variable que indica si el usuario fue encontrado y actualizado
-    actualizado = False
+    return jsonify({"mensaje": "Usuario no encontrado"}), 404
 
-    # Recorremos cada fila de la hoja desde la segunda fila (min_row=2)
-    # Buscamos el usuario con el ID solicitado
-    for fila in hoja.iter_rows(min_row=2, values_only=False):
-        id_usuario = fila[0].value  # Obtenemos el ID de la fila
-        if str(id_usuario) == id:
-            # Actualizamos los valores de nombre y email si se han proporcionado nuevos valores
-            fila[1].value = datos_actualizados.get('nombre', fila[1].value)
-            fila[2].value = datos_actualizados.get('email', fila[2].value)
-            actualizado = True
-            break  # Si actualizamos el usuario, salimos del bucle
 
-    # Si el usuario fue actualizado, guardamos los cambios en el archivo Excel
-    if actualizado:
-        libro.save('datos.xlsx')
-        return jsonify({'mensaje': 'Usuario actualizado'}), 200
-    else:
-        # Si no encontramos el ID, devolvemos un mensaje de error
-        return jsonify({'mensaje': 'Usuario no encontrado'}), 404
+@app.route("/usuarios/<int:id>", methods=["DELETE"])
+@jwt_required()
+def eliminar_usuario(id):
+    """
+    Eliminar un usuario por ID
+    ---
+    tags:
+    - Usuarios
+    parameters:
+      - in: path
+        name: id
+        type: integer
+        required: true
+        description: ID del usuario
+    responses:
+      200:
+        description: Usuario eliminado
+      404:
+        description: Usuario no encontrado
+    """
+    libro, hoja = cargar_excel()
+    if not hoja:
+        return jsonify({"mensaje": "Error: No se pudo cargar el archivo Excel"}), 500
 
-# ----------- Ejecutar la aplicación -----------
-# Esta línea inicia el servidor Flask. El servidor se ejecutará en modo de depuración (debug=True),
-# lo que permite ver errores y cambios automáticamente.
-if __name__ == '__main__':
+    for fila in hoja.iter_rows(min_row=2):
+        if int(fila[0].value) == int(id):
+            hoja.delete_rows(fila[0].row)
+            libro.save("datos.xlsx")
+            return jsonify({"mensaje": "Usuario eliminado"}), 200
+
+    return jsonify({"mensaje": "Usuario no encontrado"}), 404
+
+
+if __name__ == "__main__":
     app.run(debug=True)

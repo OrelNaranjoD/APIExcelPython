@@ -1,0 +1,7 @@
+Flask
+flasgger
+openpyxl
+python-dotenv
+black
+Flask-JWT-Extended
+flask_cors
