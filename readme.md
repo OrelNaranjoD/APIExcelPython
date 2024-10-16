@@ -25,7 +25,7 @@ pip install -r requirements.txt
 
 ### Paso 4: Renombrar el fichero .env-example por .env y cambiar la APIKey
 
-rename .env.example .env
+move .env.example .env
 
 ### Paso 5: Ejecutar la API
 
