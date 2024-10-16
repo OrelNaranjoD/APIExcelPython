@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, redirect
 from flask_cors import CORS
 from flasgger import Swagger
 from flask_jwt_extended import JWTManager, jwt_required, create_access_token
@@ -418,6 +418,9 @@ def eliminar_usuario(id):
 
     return jsonify({"mensaje": "Usuario no encontrado"}), 404
 
+@app.route('/')
+def support_swagger():
+    return redirect('/support')
 
 if __name__ == "__main__":
     app.run(debug=True)
